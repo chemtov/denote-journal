@@ -53,20 +53,19 @@ Example:
                         :value-type (plist :key-type keyword
                                            :value-type (choice string directory)))))
 
-(defcustom denote-journal-weekly-filename-format 'week-prefix
+(defcustom denote-journal-weekly-filename-format 'week-signature
   "Format for weekly journal entry filenames.
 The value can be:
-- `week-prefix': Use week number prefix like \"W13-\" before the date (default)
-- `date-only': Use only the Monday date without week prefix
-- A string: Custom format string for `format-time-string' with %V for week number
+- `week-signature': Use week number in signature like \"W13\" (recommended)
+- `date-only': Use only the Monday date without week indication
+- A string: Custom signature format string for `format-time-string' with %V for week number
 
-When set to `week-prefix', the filename will start with \"W13-\" where 13 is
-the ISO week number. When set to `date-only', it behaves like the original
-format using only the Monday date."
+When set to `week-signature', the signature will be \"W13\" where 13 is
+the ISO week number. This follows Denote's proper file naming conventions."
   :group 'denote-journal-weekly
-  :type '(choice (const :tag "Week prefix (W13-YYYYMMDD)" week-prefix)
-                 (const :tag "Date only (YYYYMMDD)" date-only)
-                 (string :tag "Custom format string")))
+  :type '(choice (const :tag "Week in signature (W13)" week-signature)
+                 (const :tag "No week indication" date-only)
+                 (string :tag "Custom signature format string")))
 
 (defvar denote-journal-weekly--current-context 'default
   "Current context for weekly journal operations.")
@@ -112,23 +111,16 @@ If no contexts are configured, return \"weekly\"."
          (monday-time (time-subtract date (days-to-time days-since-monday))))
     monday-time))
 
-(defun denote-journal-weekly--format-filename-date (date)
-  "Return formatted date string for weekly journal filename based on DATE.
-The format depends on `denote-journal-weekly-filename-format'."
+(defun denote-journal-weekly--get-signature (date)
+  "Return signature for weekly journal based on DATE and format setting."
   (let ((monday (denote-journal-weekly--get-monday-of-week date)))
     (pcase denote-journal-weekly-filename-format
-      ('week-prefix
-       (format "W%02d-%s"
-               (string-to-number (format-time-string "%V" monday))
-               (format-time-string "%Y%m%d" monday)))
-      ('date-only
-       (format-time-string "%Y%m%d" monday))
+      ('week-signature
+       (format "W%02d" (string-to-number (format-time-string "%V" monday))))
+      ('date-only "")
       ((pred stringp)
        (format-time-string denote-journal-weekly-filename-format monday))
-      (_
-       (format "W%02d-%s"
-               (string-to-number (format-time-string "%V" monday))
-               (format-time-string "%Y%m%d" monday))))))
+      (_ ""))))
 
 (defun denote-journal-weekly--title-format (&optional date)
   "Return appropriate title for weekly journal entry.
@@ -164,26 +156,30 @@ With optional DATE, use it instead of the present date."
 DATE has the same format as that returned by `denote-valid-date-p'."
   (let* ((internal-date (or (denote-valid-date-p date) (current-time)))
          (monday (denote-journal-weekly--get-monday-of-week internal-date))
-         (base-identifier (pcase denote-journal-weekly-filename-format
-                            ('week-prefix
-                             (format "W%02d-%sT[0-9]\\{6\\}"
-                                     (string-to-number (format-time-string "%V" monday))
-                                     (format-time-string "%Y%m%d" monday)))
-                            ('date-only
-                             (format "%sT[0-9]\\{6\\}" (format-time-string "%Y%m%d" monday)))
-                            ((pred stringp)
-                             (format "%sT[0-9]\\{6\\}" 
-                                     (format-time-string denote-journal-weekly-filename-format monday)))
-                            (_
-                             (format "W%02d-%sT[0-9]\\{6\\}"
-                                     (string-to-number (format-time-string "%V" monday))
-                                     (format-time-string "%Y%m%d" monday)))))
+         ;; Use proper Denote identifier format (date-time only)
+         (identifier (format "%sT[0-9]\\{6\\}" (format-time-string "%Y%m%d" monday)))
+         (signature (denote-journal-weekly--get-signature internal-date))
          (order denote-file-name-components-order)
          (id-index (seq-position order 'identifier))
-         (kw-index (seq-position order 'keywords)))
-    (if (> kw-index id-index)
-        (format "%s.*?%s" base-identifier (denote-journal-weekly--keyword-regex context))
-      (format "%s.*?@@%s" (denote-journal-weekly--keyword-regex context) base-identifier))))
+         (kw-index (seq-position order 'keywords))
+         (sig-index (seq-position order 'signature)))
+    ;; Build regex based on component order and presence of signature
+    (let ((base-pattern identifier)
+          (keyword-pattern (denote-journal-weekly--keyword-regex context)))
+      (if (string-empty-p signature)
+          ;; No signature case
+          (if (> kw-index id-index)
+              (format "%s.*?%s" base-pattern keyword-pattern)
+            (format "%s.*?@@%s" keyword-pattern base-pattern))
+        ;; With signature case
+        (let ((sig-pattern (format "==%s" (regexp-quote signature))))
+          (cond
+           ;; signature comes before identifier
+           ((< sig-index id-index)
+            (format "%s.*?@@%s.*?%s" sig-pattern base-pattern keyword-pattern))
+           ;; identifier comes before signature
+           (t
+            (format "%s.*?%s.*?%s" base-pattern sig-pattern keyword-pattern))))))))
 
 (defun denote-journal-weekly--entry-for-week (&optional date context)
   "Return list of files matching a weekly journal for DATE's week in CONTEXT.
@@ -215,10 +211,8 @@ DATE has the same format as that returned by `denote-valid-date-p'."
                                           buffer-file-name))
                return (cons context
                             (when-let* ((identifier (denote-retrieve-filename-identifier buffer-file-name))
-                                        ;; Handle both W13-YYYYMMDD and YYYYMMDD formats
-                                        (date-string (if (string-match "^W[0-9]+-\\([0-9]\\{8\\}\\)" identifier)
-                                                         (match-string 1 identifier)
-                                                       (substring identifier 0 8)))
+                                        ;; Use proper Denote identifier format (YYYYMMDD only)
+                                        (date-string (substring identifier 0 8))
                                         (year (string-to-number (substring date-string 0 4)))
                                         (month (string-to-number (substring date-string 4 6)))
                                         (day (string-to-number (substring date-string 6 8))))
@@ -245,7 +239,7 @@ Use the variable `denote-journal-keyword' plus context-specific keyword
 as keywords for the newly created file. Set the title according to the value
 of the user option `denote-journal-title-format', but adapted for weekly format.
 
-The filename format is controlled by `denote-journal-weekly-filename-format'.
+Uses proper Denote identifier format with optional week signature.
 
 With optional DATE as a prefix argument, prompt for a date. The weekly
 entry will be created for the week containing that date, starting on Monday.
@@ -261,14 +255,15 @@ that covered in the documentation of the `denote' function."
   (let* ((ctx (or context denote-journal-weekly--current-context))
          (internal-date (or (denote-valid-date-p date) (current-time)))
          (monday (denote-journal-weekly--get-monday-of-week internal-date))
-         (filename-date (denote-journal-weekly--format-filename-date internal-date))
+         (monday-string (format-time-string "%Y-%m-%d" monday))
+         (signature (denote-journal-weekly--get-signature internal-date))
          (denote-directory (denote-journal-weekly-context-directory ctx)))
     (denote
      (denote-journal-weekly--title-format internal-date)
      (denote-journal-weekly--get-keywords ctx)
-     nil nil filename-date
-     (denote-journal--get-template))
-    (run-hooks 'denote-journal-hook)))
+     nil nil monday-string
+     (denote-journal--get-template)
+     signature)))
 
 ;;;###autoload
 (defun denote-journal-weekly-path-to-new-or-existing-entry (&optional date context)
