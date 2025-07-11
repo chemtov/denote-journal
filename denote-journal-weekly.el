@@ -185,7 +185,7 @@ DATE has the same format as that returned by `denote-valid-date-p'."
 (defun denote-journal-weekly--entry-for-week (&optional date context)
   "Return list of files matching a weekly journal for DATE's week in CONTEXT.
 DATE has the same format as that returned by `denote-valid-date-p'."
-  (let ((denote-journal-directory (denote-journal-weekly-context-directory context)))
+  (let ((denote-directory (denote-journal-weekly-context-directory context)))
     (denote-directory-files (denote-journal-weekly--filename-date-regexp date context))))
 
 
@@ -274,7 +274,7 @@ return it. If there is no weekly journal entry, create it."
          (internal-date (or (denote-valid-date-p date) (current-time)))
          (files (denote-journal-weekly--entry-for-week internal-date ctx))
          (denote-kill-buffers nil)
-         (denote-directory (denote-journal-weekly-context-directory ctx)))
+         (denote-journal-directory (denote-journal-weekly-context-directory ctx)))
     (if files
         (denote-journal-select-file-prompt files)
       (save-window-excursion
