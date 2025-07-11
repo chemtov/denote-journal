@@ -149,7 +149,9 @@ With optional DATE, use it instead of the present date."
   (let* ((journal-keywords (denote-journal-keyword))
          (weekly-keyword (list (denote-journal-weekly-context-keyword context)))
          (all-keywords (append journal-keywords weekly-keyword))
-         (keywords-sorted (mapcar #'regexp-quote (denote-keywords-sort all-keywords))))
+         ;; Apply the same slugification that Denote uses for keywords
+         (keywords-slugified (denote-sluggify-keywords-and-apply-rules all-keywords))
+         (keywords-sorted (mapcar #'regexp-quote (denote-keywords-sort keywords-slugified))))
     (concat "_" (string-join keywords-sorted ".*_"))))
 
 (defun denote-journal-weekly--filename-date-regexp (&optional date context)
