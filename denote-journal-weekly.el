@@ -377,7 +377,7 @@ With optional CONTEXT, use that context. When called interactively with
 prefix argument, prompt for context."
   (interactive
    (list (when current-prefix-arg (denote-journal-weekly--prompt-for-context))))
-  (denote-journal-weekly-new-or-existing-entry nil context))
+  (denote-journal-weekly-new-or-existing-entry (format-time-string "%Y-%m-%d" (current-time)) context))
 
 (provide 'denote-journal-weekly)
 ;;; denote-journal-weekly.el ends here
