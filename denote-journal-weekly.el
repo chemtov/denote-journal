@@ -68,11 +68,8 @@ to lowercase, so \"W13\" becomes \"w13\" in the actual filename."
                  (const :tag "No week indication" date-only)
                  (string :tag "Custom signature format string")))
 
-(defvar denote-journal-weekly--current-context 'default
-  "Current context for weekly journal operations.")
-
-(defvar denote-journal-weekly--last-used-context nil
-  "Last used context for weekly journal operations.")
+(defvar denote-journal-weekly--context-stack nil
+  "Stack of recently used contexts for weekly journal operations.")
 
 ;;;; Helper functions
 
@@ -83,12 +80,19 @@ If no contexts are configured, return '(default)."
       '(default)
     (mapcar #'car denote-journal-weekly-contexts)))
 
+(defun denote-journal-weekly--get-context (&optional context)
+  "Get context, updating the context stack."
+  (let ((ctx (or context (car denote-journal-weekly--context-stack) 'default)))
+    (setq denote-journal-weekly--context-stack 
+          (cons ctx (remove ctx denote-journal-weekly--context-stack)))
+    ctx))
+
 (defun denote-journal-weekly-context-directory (&optional context)
   "Return directory for CONTEXT, defaulting to current context.
 If no contexts are configured, use the `denote-journal-directory'."
   (if (null denote-journal-weekly-contexts)
       (denote-journal-directory)
-    (let* ((ctx (or context denote-journal-weekly--current-context))
+    (let* ((ctx (denote-journal-weekly--get-context context))
            (config (alist-get ctx denote-journal-weekly-contexts))
            (directory (plist-get config :directory)))
       (if directory
@@ -103,7 +107,7 @@ If no contexts are configured, use the `denote-journal-directory'."
 If no contexts are configured, return \"weekly\"."
   (if (null denote-journal-weekly-contexts)
       "weekly"
-    (let* ((ctx (or context denote-journal-weekly--current-context))
+    (let* ((ctx (denote-journal-weekly--get-context context))
            (config (alist-get ctx denote-journal-weekly-contexts)))
       (or (plist-get config :keyword) "weekly"))))
 
@@ -147,11 +151,14 @@ With optional DATE, use it instead of the present date."
         (car specifiers)
       (format-time-string specifiers monday))))
 
+(defun denote-journal-weekly--get-combined-keywords (&optional context)
+  "Return combined journal and weekly keywords for CONTEXT."
+  (append (denote-journal-keyword) 
+          (list (denote-journal-weekly-context-keyword context))))
+
 (defun denote-journal-weekly--keyword-regex (&optional context)
   "Return regex that matches both journal and weekly keywords for CONTEXT."
-  (let* ((journal-keywords (denote-journal-keyword))
-         (weekly-keyword (list (denote-journal-weekly-context-keyword context)))
-         (all-keywords (append journal-keywords weekly-keyword))
+  (let* ((all-keywords (denote-journal-weekly--get-combined-keywords context))
          ;; Apply the same slugification that Denote uses for keywords
          (keywords-slugified (denote-sluggify-keywords-and-apply-rules all-keywords))
          (keywords-sorted (mapcar #'regexp-quote (denote-keywords-sort keywords-slugified))))
@@ -178,16 +185,9 @@ DATE has the same format as that returned by `denote-valid-date-p'."
 (defun denote-journal-weekly--entry-for-week (&optional date context)
   "Return list of files matching a weekly journal for DATE's week in CONTEXT.
 DATE has the same format as that returned by `denote-valid-date-p'."
-  (let ((denote-directory (denote-journal-weekly-context-directory context)))
+  (let ((denote-journal-directory (denote-journal-weekly-context-directory context)))
     (denote-directory-files (denote-journal-weekly--filename-date-regexp date context))))
 
-(defun denote-journal-weekly--get-keywords (&optional context)
-  "Return combined keywords for weekly journal entries in CONTEXT."
-  (let ((journal-keywords (denote-journal-keyword))
-        (weekly-keyword (denote-journal-weekly-context-keyword context)))
-    (if (listp journal-keywords)
-        (append journal-keywords (list weekly-keyword))
-      (list journal-keywords weekly-keyword))))
 
 (defun denote-journal-weekly--file-is-weekly-p (file &optional context)
   "Return non-nil if FILE is a weekly journal entry in CONTEXT."
@@ -246,16 +246,15 @@ that covered in the documentation of the `denote' function."
   (interactive
    (list (when (member current-prefix-arg '((4) (16))) (denote-date-prompt))
          (when (equal current-prefix-arg '(16)) (denote-journal-weekly--prompt-for-context))))
-  (let* ((ctx (or context denote-journal-weekly--current-context))
+  (let* ((ctx (denote-journal-weekly--get-context context))
          (internal-date (or (denote-valid-date-p date) (current-time)))
          (monday (denote-journal-weekly--get-monday-of-week internal-date))
          (monday-string (format-time-string "%Y-%m-%d" monday))
          (signature (denote-journal-weekly--get-signature internal-date))
          (denote-directory (denote-journal-weekly-context-directory ctx)))
-    (setq denote-journal-weekly--last-used-context ctx)
     (denote
      (denote-journal-weekly--title-format internal-date)
-     (denote-journal-weekly--get-keywords ctx)
+     (denote-journal-weekly--get-combined-keywords ctx)
      nil nil monday-string
      (denote-journal--get-template)
      signature)))
@@ -271,17 +270,13 @@ documentation of the `denote' function.
 If there are multiple weekly journal entries for the week, prompt for
 one among them using minibuffer completion. If there is only one,
 return it. If there is no weekly journal entry, create it."
-  (let* ((ctx (or context denote-journal-weekly--current-context))
+  (let* ((ctx (denote-journal-weekly--get-context context))
          (internal-date (or (denote-valid-date-p date) (current-time)))
          (files (denote-journal-weekly--entry-for-week internal-date ctx))
          (denote-kill-buffers nil)
          (denote-directory (denote-journal-weekly-context-directory ctx)))
     (if files
-        (let ((default-directory denote-directory)
-              (relative-files (mapcar (lambda (file)
-                                        (file-relative-name file denote-directory))
-                                      files)))
-          (denote-journal-select-file-prompt relative-files))
+        (denote-journal-select-file-prompt files)
       (save-window-excursion
         (denote-journal-weekly-new-entry date ctx)
         (save-buffer)
@@ -310,8 +305,7 @@ as that covered in the documentation of the `denote' function."
   (interactive
    (list (when (member current-prefix-arg '((4) (16))) (denote-date-prompt))
          (when (equal current-prefix-arg '(16)) (denote-journal-weekly--prompt-for-context))))
-  (let ((ctx (or context denote-journal-weekly--current-context)))
-    (setq denote-journal-weekly--last-used-context ctx)
+  (let ((ctx (denote-journal-weekly--get-context context)))
     (find-file (denote-journal-weekly-path-to-new-or-existing-entry date ctx))))
 
 ;;;###autoload
@@ -341,9 +335,8 @@ file's title. This has the same meaning as in `denote-link'."
    (pcase current-prefix-arg
      ('(16) (list (denote-date-prompt) (denote-journal-weekly--prompt-for-context) :id-only))
      ('(4) (list (denote-date-prompt)))))
-  (let* ((ctx (or context denote-journal-weekly--current-context))
+  (let* ((ctx (denote-journal-weekly--get-context context))
          (path (denote-journal-weekly-path-to-new-or-existing-entry date ctx)))
-    (setq denote-journal-weekly--last-used-context ctx)
     (denote-link path
                  (denote-filetype-heuristics (buffer-file-name))
                  (denote-get-link-description path)
@@ -386,10 +379,7 @@ With optional CONTEXT, use that context. When called interactively with
 prefix argument, prompt for context."
   (interactive
    (list (when current-prefix-arg (denote-journal-weekly--prompt-for-context))))
-  (let ((ctx (or context 
-                 denote-journal-weekly--last-used-context 
-                 'default)))
-    (setq denote-journal-weekly--last-used-context ctx)
+  (let ((ctx (denote-journal-weekly--get-context context)))
     (denote-journal-weekly-new-or-existing-entry (format-time-string "%Y-%m-%d" (current-time)) ctx)))
 
 (provide 'denote-journal-weekly)
