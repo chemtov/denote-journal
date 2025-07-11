@@ -71,6 +71,9 @@ to lowercase, so \"W13\" becomes \"w13\" in the actual filename."
 (defvar denote-journal-weekly--current-context 'default
   "Current context for weekly journal operations.")
 
+(defvar denote-journal-weekly--last-used-context nil
+  "Last used context for weekly journal operations.")
+
 ;;;; Helper functions
 
 (defun denote-journal-weekly-contexts ()
@@ -249,6 +252,7 @@ that covered in the documentation of the `denote' function."
          (monday-string (format-time-string "%Y-%m-%d" monday))
          (signature (denote-journal-weekly--get-signature internal-date))
          (denote-directory (denote-journal-weekly-context-directory ctx)))
+    (setq denote-journal-weekly--last-used-context ctx)
     (denote
      (denote-journal-weekly--title-format internal-date)
      (denote-journal-weekly--get-keywords ctx)
@@ -304,6 +308,7 @@ as that covered in the documentation of the `denote' function."
    (list (when (member current-prefix-arg '((4) (16))) (denote-date-prompt))
          (when (equal current-prefix-arg '(16)) (denote-journal-weekly--prompt-for-context))))
   (let ((ctx (or context denote-journal-weekly--current-context)))
+    (setq denote-journal-weekly--last-used-context ctx)
     (find-file (denote-journal-weekly-path-to-new-or-existing-entry date ctx))))
 
 ;;;###autoload
@@ -335,6 +340,7 @@ file's title. This has the same meaning as in `denote-link'."
      ('(4) (list (denote-date-prompt)))))
   (let* ((ctx (or context denote-journal-weekly--current-context))
          (path (denote-journal-weekly-path-to-new-or-existing-entry date ctx)))
+    (setq denote-journal-weekly--last-used-context ctx)
     (denote-link path
                  (denote-filetype-heuristics (buffer-file-name))
                  (denote-get-link-description path)
@@ -377,7 +383,11 @@ With optional CONTEXT, use that context. When called interactively with
 prefix argument, prompt for context."
   (interactive
    (list (when current-prefix-arg (denote-journal-weekly--prompt-for-context))))
-  (denote-journal-weekly-new-or-existing-entry (format-time-string "%Y-%m-%d" (current-time)) context))
+  (let ((ctx (or context 
+                 denote-journal-weekly--last-used-context 
+                 'default)))
+    (setq denote-journal-weekly--last-used-context ctx)
+    (denote-journal-weekly-new-or-existing-entry (format-time-string "%Y-%m-%d" (current-time)) ctx)))
 
 (provide 'denote-journal-weekly)
 ;;; denote-journal-weekly.el ends here
