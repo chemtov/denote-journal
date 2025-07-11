@@ -277,8 +277,11 @@ return it. If there is no weekly journal entry, create it."
          (denote-kill-buffers nil)
          (denote-directory (denote-journal-weekly-context-directory ctx)))
     (if files
-        (let ((default-directory denote-directory))
-          (denote-journal-select-file-prompt files))
+        (let ((default-directory denote-directory)
+              (relative-files (mapcar (lambda (file)
+                                        (file-relative-name file denote-directory))
+                                      files)))
+          (denote-journal-select-file-prompt relative-files))
       (save-window-excursion
         (denote-journal-weekly-new-entry date ctx)
         (save-buffer)
