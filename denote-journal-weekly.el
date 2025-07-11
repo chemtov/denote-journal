@@ -56,14 +56,15 @@ Example:
 (defcustom denote-journal-weekly-filename-format 'week-signature
   "Format for weekly journal entry filenames.
 The value can be:
-- `week-signature': Use week number in signature like \"W13\" (recommended)
+- `week-signature': Use week number in signature like \"w13\" (recommended)
 - `date-only': Use only the Monday date without week indication
 - A string: Custom signature format string for `format-time-string' with %V for week number
 
-When set to `week-signature', the signature will be \"W13\" where 13 is
-the ISO week number. This follows Denote's proper file naming conventions."
+When set to `week-signature', the signature will be \"w13\" where 13 is
+the ISO week number. Note that Denote automatically converts signatures
+to lowercase, so \"W13\" becomes \"w13\" in the actual filename."
   :group 'denote-journal-weekly
-  :type '(choice (const :tag "Week in signature (W13)" week-signature)
+  :type '(choice (const :tag "Week in signature (w13)" week-signature)
                  (const :tag "No week indication" date-only)
                  (string :tag "Custom signature format string")))
 
@@ -116,7 +117,7 @@ If no contexts are configured, return \"weekly\"."
   (let ((monday (denote-journal-weekly--get-monday-of-week date)))
     (pcase denote-journal-weekly-filename-format
       ('week-signature
-       (format "W%02d" (string-to-number (format-time-string "%V" monday))))
+       (format "w%02d" (string-to-number (format-time-string "%V" monday))))
       ('date-only "")
       ((pred stringp)
        (format-time-string denote-journal-weekly-filename-format monday))
@@ -159,27 +160,15 @@ DATE has the same format as that returned by `denote-valid-date-p'."
          ;; Use proper Denote identifier format (date-time only)
          (identifier (format "%sT[0-9]\\{6\\}" (format-time-string "%Y%m%d" monday)))
          (signature (denote-journal-weekly--get-signature internal-date))
-         (order denote-file-name-components-order)
-         (id-index (seq-position order 'identifier))
-         (kw-index (seq-position order 'keywords))
-         (sig-index (seq-position order 'signature)))
-    ;; Build regex based on component order and presence of signature
-    (let ((base-pattern identifier)
-          (keyword-pattern (denote-journal-weekly--keyword-regex context)))
-      (if (string-empty-p signature)
-          ;; No signature case
-          (if (> kw-index id-index)
-              (format "%s.*?%s" base-pattern keyword-pattern)
-            (format "%s.*?@@%s" keyword-pattern base-pattern))
-        ;; With signature case
-        (let ((sig-pattern (format "==%s" (regexp-quote signature))))
-          (cond
-           ;; signature comes before identifier
-           ((< sig-index id-index)
-            (format "%s.*?@@%s.*?%s" sig-pattern base-pattern keyword-pattern))
-           ;; identifier comes before signature
-           (t
-            (format "%s.*?%s.*?%s" base-pattern sig-pattern keyword-pattern))))))))
+         (keyword-pattern (denote-journal-weekly--keyword-regex context)))
+    ;; Build regex to match files with the Monday date and correct keywords
+    ;; Handle both with and without signature for backward compatibility
+    (if (string-empty-p signature)
+        ;; No signature case - match identifier followed by keywords
+        (format "%s.*?%s" identifier keyword-pattern)
+      ;; With signature case - match identifier, signature, and keywords
+      ;; The signature gets sluggified by Denote, so match the actual result
+      (format "%s==%s.*?%s" identifier (regexp-quote signature) keyword-pattern))))
 
 (defun denote-journal-weekly--entry-for-week (&optional date context)
   "Return list of files matching a weekly journal for DATE's week in CONTEXT.
