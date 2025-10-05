@@ -20,11 +20,19 @@
 ;; This package extends denote-journal with weekly journaling functionality.
 ;; Weekly entries start on Monday and provide navigation between weeks.
 ;; Supports multiple journal directories for different contexts (work/personal).
+;;
+;; To set up org-capture integration, call:
+;;   (denote-journal-weekly-setup-capture-templates)
+;;
+;; This adds capture templates "w" (work) and "p" (personal) that create
+;; TODO entries in weekly journal files. Use C-u prefix to add to "Unexpected
+;; and Urgent" section, otherwise adds to today's day section.
 
 ;;; Code:
 
 (require 'denote-journal)
 (require 'calendar)
+(require 'tempel)
 (eval-when-compile (require 'cl-lib))
 
 (defgroup denote-journal-weekly nil
@@ -83,7 +91,7 @@ If no contexts are configured, return '(default)."
 (defun denote-journal-weekly--get-context (&optional context)
   "Get context, updating the context stack."
   (let ((ctx (or context (car denote-journal-weekly--context-stack) 'default)))
-    (setq denote-journal-weekly--context-stack 
+    (setq denote-journal-weekly--context-stack
           (cons ctx (remove ctx denote-journal-weekly--context-stack)))
     ctx))
 
@@ -153,7 +161,7 @@ With optional DATE, use it instead of the present date."
 
 (defun denote-journal-weekly--get-combined-keywords (&optional context)
   "Return combined journal and weekly keywords for CONTEXT."
-  (append (denote-journal-keyword) 
+  (append (denote-journal-keyword)
           (list (denote-journal-weekly-context-keyword context))))
 
 (defun denote-journal-weekly--keyword-regex (&optional context)
@@ -381,6 +389,144 @@ prefix argument, prompt for context."
    (list (when current-prefix-arg (denote-journal-weekly--prompt-for-context))))
   (let ((ctx (denote-journal-weekly--get-context context)))
     (denote-journal-weekly-new-or-existing-entry (format-time-string "%Y-%m-%d" (current-time)) ctx)))
+
+;;;; Org capture integration
+
+;;;###autoload
+(defun denote-journal-weekly--find-heading-position (target-text)
+  "Find position for inserting content under TARGET-TEXT heading.
+Returns the position after the heading line, or signals an error if not found."
+  (goto-char (point-min))
+  (let ((search-string (concat "* " target-text)))
+    (message "Searching for heading: %s" search-string)  ; Debug message
+    (if (search-forward search-string nil t)
+        (progn
+          (message "Found heading at line %d" (line-number-at-pos))  ; Debug message
+          ;; Move to end of line and then to next line to be inside the section
+          (end-of-line)
+          (forward-line 1)
+          (message "Positioned at line %d, column %d" (line-number-at-pos) (current-column))  ; Debug message
+          (point))
+      (error "Could not find heading: %s" target-text))))
+
+;;;###autoload
+(defun denote-journal-weekly--get-capture-target (context &optional urgent)
+  "Return point for inserting content in weekly journal for CONTEXT.
+If URGENT is non-nil, target the 'Unexpected and Urgent' section.
+Otherwise target today's day section.
+Ensures templates are applied when creating new files."
+  (let* ((internal-date (current-time))
+         (existing-files (denote-journal-weekly--entry-for-week internal-date context))
+         (file-path (if existing-files
+                        ;; File exists, just get the path
+                        (car existing-files)
+                      ;; File doesn't exist, create it and apply template
+                      (let ((new-file-path (save-window-excursion
+                                             (denote-journal-weekly-new-entry nil context)
+                                             (save-buffer)
+                                             (buffer-file-name))))
+                        ;; Apply the appropriate template
+                        (with-current-buffer (find-file-noselect new-file-path)
+                          (goto-char (point-max))
+                          (cond
+                           ((eq context 'work)
+                            (tempel-insert 'd-plan-workday))
+                           ((eq context 'personal)
+                            (tempel-insert 'd-plan-personalday))
+                           (t
+                            ;; Default context, try to determine from directory or use personal
+                            (tempel-insert 'd-plan-personalday)))
+                          (save-buffer))
+                        new-file-path)))
+         (target-text (if urgent
+                        "Unexpected and Urgent"
+                      (format-time-string "%A"))))
+    ;; Switch to the file and find the position
+    (message "DEBUG: Opening file: %s" file-path)
+    (find-file file-path)
+    (message "DEBUG: Current buffer: %s" (buffer-name))
+    (message "DEBUG: Buffer size: %d" (buffer-size))
+
+    ;; Find the heading and position cursor
+    (goto-char (point-min))
+    (let ((search-string (concat "* " target-text)))
+      (message "Searching for heading: %s" search-string)
+      (if (search-forward search-string nil t)
+          (progn
+            (message "Found heading at line %d" (line-number-at-pos))
+            ;; Go back to the beginning of the heading line
+            (beginning-of-line)
+            ;; Set org-capture properties to indicate we're at a target entry
+            (org-capture-put :target-entry-p t)
+            (org-capture-put :exact-position nil)
+            (message "Positioned at heading line %d" (line-number-at-pos))
+            (message "DEBUG: Line at point: '%s'" (string-trim (thing-at-point 'line t)))
+            ;; Return the current point (at the heading)
+            (point))
+        (error "Could not find heading: %s" target-text)))))
+
+;;;###autoload
+(defun denote-journal-weekly-org-capture-work-todo ()
+  "Org capture function for work weekly journal TODO entries.
+With prefix argument, add to 'Unexpected and Urgent' section.
+Otherwise add to today's day section.
+Applies d-plan-workday template when creating new files."
+  (denote-journal-weekly--get-capture-target 'work current-prefix-arg))
+
+;;;###autoload
+(defun denote-journal-weekly-org-capture-personal-todo ()
+  "Org capture function for personal weekly journal TODO entries.
+With prefix argument, add to 'Unexpected and Urgent' section.
+Otherwise add to today's day section.
+Applies d-plan-personalday template when creating new files."
+  (denote-journal-weekly--get-capture-target 'personal current-prefix-arg))
+
+;;;###autoload
+(defun denote-journal-weekly-setup-capture-templates ()
+  "Add weekly journal capture templates to `org-capture-templates'.
+This adds two capture templates:
+- \"w\" for work weekly TODOs
+- \"p\" for personal weekly TODOs
+
+With prefix argument, TODOs go to 'Unexpected and Urgent' section,
+otherwise they go to today's day section."
+  (interactive)
+  (unless (boundp 'org-capture-templates)
+    (setq org-capture-templates nil))
+
+  ;; Remove existing templates with same keys to avoid duplicates
+  (setq org-capture-templates
+        (cl-remove-if (lambda (template)
+                        (member (car template) '("w" "p")))
+                      org-capture-templates))
+
+  ;; Test with just function instead of file+function
+  (setq org-capture-templates
+        (append org-capture-templates
+                '(("w" "Work Weekly TODO" entry
+                   (function denote-journal-weekly-org-capture-work-todo)
+                   "** TODO %?\n   SCHEDULED: %t\n"
+                   :empty-lines 1)
+                  ("p" "Personal Weekly TODO" entry
+                   (function denote-journal-weekly-org-capture-personal-todo)
+                   "** TODO %?\n   SCHEDULED: %t\n"
+                   :empty-lines 1))))
+
+  (message "Weekly journal capture templates added: w (work), p (personal)"))
+
+;;;###autoload
+(defun denote-journal-weekly-debug-capture-target ()
+  "Debug function to test capture target behavior."
+  (interactive)
+  (let ((pos (denote-journal-weekly--get-capture-target 'personal)))
+    (message "Capture target returned position: %d" pos)
+    (message "Current buffer: %s" (buffer-name))
+    (message "Point is now at: %d" (point))
+    (message "Line content: %s" (thing-at-point 'line t))))
+
+;; Automatically set up capture templates when package is loaded
+(with-eval-after-load 'denote-journal-weekly
+  (denote-journal-weekly-setup-capture-templates))
 
 (provide 'denote-journal-weekly)
 ;;; denote-journal-weekly.el ends here
